@@ -8,9 +8,9 @@
                          "events":  [
 
                                     ],
-                         "usedPercentage":  99,
-                         "resetsAt":  "2026-08-14T17:40:00+00:00",
-                         "weeklyUsedPercentage":  26,
+                         "usedPercentage":  28.999999999999996,
+                         "resetsAt":  "2026-08-15T04:10:00+00:00",
+                         "weeklyUsedPercentage":  28.000000000000004,
                          "weeklyResetsAt":  "2026-08-19T22:00:00+00:00",
                          "lastSource":  "statusline",
                          "mode":  "auto-precise"
