@@ -1,0 +1,7 @@
+﻿{
+  "services": [
+    { "id": "claude",  "name": "Claude",  "color": "#C77B4A", "resetCycleHours": 5,  "mode": "auto",   "events": [] },
+    { "id": "chatgpt", "name": "ChatGPT", "color": "#10A37F", "resetCycleHours": 5,  "mode": "auto",   "events": [] },
+    { "id": "gemini",  "name": "Gemini",  "color": "#4285F4", "resetCycleHours": 24, "mode": "manual", "events": [] }
+  ]
+}

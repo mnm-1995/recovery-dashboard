@@ -1,0 +1,279 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Recovery</title>
+
+<!-- iPhone ホーム画面アプリ化 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Recovery">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0D1117">
+
+<style>
+  :root{
+    --bg: #0D1117;
+    --surface: #151A21;
+    --surface-2: #1C222B;
+    --line: #262D37;
+    --text: #E6EDF3;
+    --muted: #7D8792;
+    --faint: #4B535D;
+    --ready: #3FB950;
+    --cooldown: #D29922;
+    --depleted: #F0665A;
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Hiragino Sans", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Menlo", monospace;
+  }
+
+  *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body{
+    margin:0; padding:0; background: var(--bg); color: var(--text);
+    font-family: var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body{
+    padding: calc(env(safe-area-inset-top) + 18px) 16px calc(env(safe-area-inset-bottom) + 32px);
+    min-height: 100vh;
+  }
+
+  header.top{
+    display:flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 22px;
+  }
+
+  header.top .eyebrow{
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+
+  header.top .clock{
+    font-family: var(--font-mono); font-size: 13px; color: var(--faint);
+  }
+
+  h1{
+    font-size: 26px; margin: 2px 0 24px; font-weight: 700; letter-spacing: -0.01em;
+  }
+
+  .cards{ display:flex; flex-direction:column; gap: 14px; }
+
+  .card{
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 18px 18px 16px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .card .accent-bar{
+    position:absolute; left:0; top:0; bottom:0; width:3px;
+  }
+
+  .card-head{
+    display:flex; align-items:center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  .service-name{
+    font-size: 17px; font-weight: 700;
+  }
+
+  .status-pill{
+    font-family: var(--font-mono);
+    font-size: 10.5px; letter-spacing: 0.04em;
+    padding: 3px 9px; border-radius: 20px;
+    text-transform: uppercase; font-weight: 600;
+    border: 1px solid transparent;
+  }
+  .status-pill.ready{ color: var(--ready); background: rgba(63,185,80,0.12); border-color: rgba(63,185,80,0.3); }
+  .status-pill.cooldown{ color: var(--cooldown); background: rgba(210,153,34,0.12); border-color: rgba(210,153,34,0.3); }
+  .status-pill.depleted{ color: var(--depleted); background: rgba(240,102,90,0.12); border-color: rgba(240,102,90,0.3); }
+
+  .mode-tag{
+    font-size: 9.5px; color: var(--faint); font-family: var(--font-mono);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+
+  .body-row{ display:flex; align-items:center; gap: 18px; }
+
+  .ring-wrap{ position: relative; width: 92px; height: 92px; flex-shrink:0; }
+  .ring-wrap svg{ width:100%; height:100%; transform: rotate(-90deg); }
+  .ring-wrap .pct{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction: column;
+  }
+  .ring-wrap .pct b{ font-family: var(--font-mono); font-size: 20px; font-weight: 700; }
+  .ring-wrap .pct span{ font-size: 9px; color: var(--muted); margin-top:1px; }
+
+  .meta{ flex:1; min-width:0; }
+  .meta .row{ display:flex; justify-content: space-between; font-size: 12.5px; padding: 3px 0; }
+  .meta .row .k{ color: var(--muted); }
+  .meta .row .v{ font-family: var(--font-mono); color: var(--text); }
+  .meta .row .v.irregular{ color: var(--cooldown); }
+
+  .history{
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+  }
+  .history .h-label{ font-size: 10.5px; color: var(--muted); letter-spacing:0.06em; text-transform: uppercase; margin-bottom: 8px; }
+  .h-item{
+    display:flex; align-items:center; gap:8px; font-size: 12px; padding: 3px 0;
+    color: var(--muted);
+  }
+  .h-item .dot{ width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+  .h-item .dot.depleted{ background: var(--depleted); }
+  .h-item .dot.recovered{ background: var(--ready); }
+  .h-item .t{ font-family: var(--font-mono); color: var(--text); }
+  .h-item .badge{
+    font-size: 9.5px; padding: 1px 6px; border-radius: 10px;
+    background: rgba(210,153,34,0.15); color: var(--cooldown); font-weight:600;
+  }
+
+  .empty{
+    text-align:center; padding: 60px 20px; color: var(--muted);
+  }
+  .empty .big{ font-size: 15px; margin-bottom: 6px; color: var(--text); }
+  .empty .small{ font-size: 12.5px; font-family: var(--font-mono); }
+
+  footer{
+    margin-top: 26px; text-align:center; font-size: 10.5px; color: var(--faint);
+    font-family: var(--font-mono);
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="eyebrow">AI Usage</div>
+  <div class="clock" id="clock">--:--</div>
+</header>
+<h1>回復量</h1>
+
+<div class="cards" id="cards"></div>
+
+<footer id="syncedAt">sync: —</footer>
+
+<script>
+const RING_R = 38;
+const RING_C = 2 * Math.PI * RING_R;
+
+function statusOf(pct){
+  if(pct >= 99.5) return 'ready';
+  if(pct <= 0.5) return 'depleted';
+  return 'cooldown';
+}
+const statusLabel = { ready:'READY', cooldown:'RECOVERING', depleted:'DEPLETED' };
+
+function fmtTime(iso){
+  const d = new Date(iso);
+  return d.toLocaleString('ja-JP', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+function fmtDur(ms){
+  const totalMin = Math.max(0, Math.round(ms/60000));
+  const h = Math.floor(totalMin/60), m = totalMin%60;
+  if(h <= 0) return `${m}分`;
+  return `${h}時間${m}分`;
+}
+
+function computeState(service){
+  const events = [...(service.events||[])].sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
+  const last = events[events.length-1];
+  const cycleMs = service.resetCycleHours * 3600 * 1000;
+  const now = new Date();
+
+  if(!last || last.type === 'recovered'){
+    return { pct: 100, status:'ready', nextInfo: '待機中', lastEvent: last };
+  }
+  // 直近が depleted = 回復中
+  const elapsed = now - new Date(last.timestamp);
+  const pct = Math.min(100, Math.max(0, (elapsed / cycleMs) * 100));
+  const remain = cycleMs - elapsed;
+  return {
+    pct,
+    status: statusOf(pct),
+    nextInfo: remain > 0 ? `あと ${fmtDur(remain)} で通常回復` : '通常回復の目安を経過',
+    lastEvent: last
+  };
+}
+
+function renderCard(service){
+  const state = computeState(service);
+  const events = [...(service.events||[])].sort((a,b)=> new Date(b.timestamp)-new Date(a.timestamp)).slice(0,4);
+
+  const dash = RING_C * (1 - state.pct/100);
+
+  const historyHtml = events.length ? events.map(ev=>{
+    const badge = ev.type === 'recovered' && ev.irregular
+      ? `<span class="badge">通常より早い回復</span>` : '';
+    return `<div class="h-item">
+      <span class="dot ${ev.type}"></span>
+      <span class="t">${fmtTime(ev.timestamp)}</span>
+      <span>${ev.type === 'depleted' ? '上限到達' + (ev.resetHint ? ` (目安:${ev.resetHint})` : '') : '回復'}</span>
+      ${badge}
+    </div>`;
+  }).join('') : `<div class="h-item">まだ記録がありません</div>`;
+
+  return `
+  <div class="card">
+    <div class="accent-bar" style="background:${service.color}"></div>
+    <div class="card-head">
+      <div>
+        <div class="service-name">${service.name}</div>
+        <div class="mode-tag">${service.mode === 'manual' ? '手動記録' : '自動監視(10分毎)'}</div>
+      </div>
+      <div class="status-pill ${state.status}">${statusLabel[state.status]}</div>
+    </div>
+    <div class="body-row">
+      <div class="ring-wrap">
+        <svg viewBox="0 0 92 92">
+          <circle cx="46" cy="46" r="${RING_R}" fill="none" stroke="var(--surface-2)" stroke-width="7"/>
+          <circle cx="46" cy="46" r="${RING_R}" fill="none" stroke="${service.color}" stroke-width="7"
+            stroke-linecap="round"
+            stroke-dasharray="${RING_C}" stroke-dashoffset="${dash}"
+            style="transition: stroke-dashoffset .4s ease"/>
+        </svg>
+        <div class="pct"><b>${Math.round(state.pct)}%</b><span>回復</span></div>
+      </div>
+      <div class="meta">
+        <div class="row"><span class="k">状態</span><span class="v">${state.nextInfo}</span></div>
+        <div class="row"><span class="k">周期</span><span class="v">${service.resetCycleHours}時間</span></div>
+        ${state.lastEvent ? `<div class="row"><span class="k">直近</span><span class="v">${fmtTime(state.lastEvent.timestamp)}</span></div>` : ''}
+      </div>
+    </div>
+    <div class="history">
+      <div class="h-label">履歴</div>
+      ${historyHtml}
+    </div>
+  </div>`;
+}
+
+async function load(){
+  const clockEl = document.getElementById('clock');
+  const tick = ()=> clockEl.textContent = new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'});
+  tick(); setInterval(tick, 30000);
+
+  try{
+    const res = await fetch('data.json', { cache: 'no-store' });
+    const data = await res.json();
+    const cardsEl = document.getElementById('cards');
+
+    if(!data.services || !data.services.length){
+      cardsEl.innerHTML = `<div class="empty"><div class="big">サービスがまだ登録されていません</div><div class="small">PowerShell から log.ps1 -Action add で追加してください</div></div>`;
+    } else {
+      cardsEl.innerHTML = data.services.map(renderCard).join('');
+    }
+    document.getElementById('syncedAt').textContent = 'sync: ' + new Date().toLocaleString('ja-JP');
+  }catch(e){
+    document.getElementById('cards').innerHTML = `<div class="empty"><div class="big">data.json を読み込めませんでした</div><div class="small">${e}</div></div>`;
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
