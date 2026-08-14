@@ -3,6 +3,43 @@
 Claude Codeが自律的に検証・修正・デプロイした結果のまとめです。
 （実施日: 2026-08-14）
 
+## 追記（同日）: Claudeの回復量表示を実数値ベースに切り替え
+
+`~/.claude/statusline_dashboard.py`（ユーザーが手動設定済み）が書き出す
+`~/.claude/rate_limit_cache.json` から、Claudeの実際の利用率(5時間枠/週間枠)を
+読み取って表示するように変更しました。
+
+- `watch-agent.ps1`: `~/.claude/rate_limit_cache.json` が存在し `updatedAt` が
+  24時間以内なら、そこから `usedPercentage`/`resetsAt`(5時間枠)、
+  `weeklyUsedPercentage`/`weeklyResetsAt`(週間枠) を読み取り `lastSource:"statusline"`
+  としてdata.jsonに反映。キャッシュが無い/古い場合のみ既存のping方式にフォールバックし
+  `lastSource:"ping"` とする。usedPercentageが95%以上から20ポイント以上急落した
+  遷移を「回復」とみなし、既存のGmail通知・イレギュラー判定の仕組みをそのまま流用。
+- `data.json`: claudeサービスのスキーマを拡張（`mode:"auto-precise"` /
+  `usedPercentage` / `resetsAt` / `weeklyUsedPercentage` / `weeklyResetsAt` /
+  `lastSource`）。ChatGPT/Geminiのスキーマは変更なし。
+- `index.html`: Claudeカードのみ、リング表示を `100 - usedPercentage` に、
+  サブテキストにリセットまでの残り時間、週間制限のミニバー(使用率%とリセット曜日時刻)を
+  追加。`usedPercentage` が未設定(null)の場合は従来どおりイベントログベースの表示に
+  自動フォールバックするため、ChatGPT/Geminiの表示・挙動は変更していません。
+
+**動作確認について**: この作業を行ったセッションでは
+`~/.claude/rate_limit_cache.json` がまだ一度も生成されていなかった（対話セッションで
+status lineが描画されないと作られないため）。そのため:
+- `watch-agent.ps1` を実際に1回フル実行し、ping方式へのフォールバック
+  （`lastSource:"ping"`, `mode:"auto-precise"`）がdata.jsonに正しく反映され、
+  git push まで完走することを確認済み。
+- statusline方式（実数値の読み取り・47%等の反映・100%到達時のdepletedイベント・
+  100%→5%急落時のrecoveredイベント・24時間超キャッシュの棄却）は、
+  `Get-ClaudeRateLimitCache` / `Update-ClaudePrecise` のロジックを複製した
+  隔離テストスクリプトで4パターンとも意図通り動作することを確認済み（本番の
+  git操作は行っていない）。実際のキャッシュファイルを使った本番フル実行での
+  確認は未実施。次に通常のClaude Codeセッションで status line が一度描画されれば
+  キャッシュが自然に作られるので、その後の次回タスクスケジューラ実行（最大10分後）で
+  自動的に実数値表示へ切り替わるはずです。
+- index.htmlは、上記の実数値データを模したdata.jsonでPlaywrightによりモバイル幅/
+  デスクトップ幅の両方をスクリーンショット確認し、JSエラー無し・レイアウト崩れ無しを確認済み。
+
 ## 自動化できたこと
 
 | # | 項目 | 結果 |

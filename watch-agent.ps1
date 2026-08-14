@@ -5,14 +5,20 @@
   Windowsタスクスケジューラから定期実行される想定（setup-task.ps1 参照）。
 
 .重要な前提・限界（正直に書いておきます）
-  - Claude/OpenAIとも「残り使用量をAPIで問い合わせる」公式手段は現時点で存在しません。
-    このスクリプトは「ごく軽いプロンプトを実際に送ってみて、制限メッセージが返るかどうか」
-    を見る"ping方式"で判定します（Codex側は非対話でのレート情報取得が未サポートである
-    ことがOpenAI公式リポジトリのissueで確認済みです）。
-  - そのためチェック自体が極小ですが実際の利用量を消費します。既定は10分間隔です。
-  - 制限メッセージの文言はプラン・言語・時期によって変わる可能性があります。
-    誤検知に気づいたら下の $claudeLimitPattern / $codexLimitPattern を調整してください。
-  - Geminiはブラウザ版のみのためこの自動チェック対象外です（gemini-log.ps1で手動記録）。
+  - OpenAI(Codex)は「残り使用量をAPIで問い合わせる」公式手段が現時点で存在しません。
+    ChatGPT側は引き続き「ごく軽いプロンプトを実際に送ってみて、制限メッセージが返るか」
+    を見る"ping方式"で判定します（非対話でのレート情報取得が未サポートであることが
+    OpenAI公式リポジトリのissueで確認済みです）。
+  - Claudeは 2026-08-14 以降、Claude Codeのstatus line hook
+    （~/.claude/statusline_dashboard.py）が書き出す ~/.claude/rate_limit_cache.json
+    から実際の rate_limits（5時間枠/週間枠の使用率・リセット時刻）を読み取れるように
+    なったため、これを正として使う（"statusline方式"）。このキャッシュは対話セッションで
+    status lineが描画されたときにしか更新されないため、存在しない/24時間以上古い場合は
+    従来のping方式にフォールバックする。
+  - ping方式のチェック自体は極小だが実際の利用量を消費する。既定は10分間隔。
+  - 制限メッセージの文言はプラン・言語・時期によって変わる可能性がある。
+    誤検知に気づいたら下の $claudeLimitPattern / $codexLimitPattern を調整すること。
+  - Geminiはブラウザ版のみのためこの自動チェック対象外（gemini-log.ps1で手動記録）。
 #>
 
 $ErrorActionPreference = "Continue"
@@ -39,6 +45,12 @@ $claudeResetHintPattern = '(?is)resets?\s*(?:at|in)?\s*([^,."\r\n]{1,60})'
 # 実際のメッセージ文言は "codex exec" 経由で制限に当たった際に必ず一度目視確認すること。
 $codexLimitPattern = '(?is)usage limit reached|rate limit'
 $codexResetHintPattern = '(?is)(try again[^\r\n."]*|resets?\s*(?:at|in)?\s*[^,."\r\n]{1,60})'
+
+# Claude statusline方式（実数値）関連
+$claudeCachePath = Join-Path $HOME ".claude\rate_limit_cache.json"
+$claudeCacheMaxAgeHours = 24
+$claudeDepletedThreshold = 99.5   # usedPercentageがこれ以上なら「上限到達」とみなす
+$claudeRecoveryDropPoints = 20    # 直前ポーリングからこれ以上usedPercentageが下がったら「回復」とみなす
 
 function Get-ResetHint($raw, $hintPattern) {
   if ($raw -match $hintPattern) { return $Matches[1].Trim() }
@@ -95,11 +107,159 @@ function Get-LastEvent($svc) {
   return $sorted[$sorted.Count - 1]
 }
 
+# ~/.claude/rate_limit_cache.json を読み、有効(24時間以内・fiveHourあり)なら返す。無ければ$null。
+function Get-ClaudeRateLimitCache {
+  if (-not (Test-Path $claudeCachePath)) { return $null }
+  try {
+    $cache = Get-Content $claudeCachePath -Raw | ConvertFrom-Json
+  } catch {
+    return $null
+  }
+  if (-not $cache.updatedAt) { return $null }
+  try {
+    $updatedAt = [datetimeoffset]::Parse($cache.updatedAt)
+  } catch {
+    return $null
+  }
+  $ageHours = ([datetimeoffset]::UtcNow - $updatedAt).TotalHours
+  if ($ageHours -lt 0 -or $ageHours -gt $claudeCacheMaxAgeHours) { return $null }
+  if (-not $cache.fiveHour -or $null -eq $cache.fiveHour.usedPercentage) { return $null }
+  return $cache
+}
+
+# statusline方式でclaudeサービスを更新する。戻り値: @{ changed=bool; notifications=@() }
+function Update-ClaudePrecise($svc, $cache) {
+  $result = @{ changed = $false; notifications = @() }
+
+  $previousUsed = $svc.usedPercentage
+  $usedPercentage = $cache.fiveHour.usedPercentage
+  $resetsAt = $cache.fiveHour.resetsAt
+  $weeklyUsedPercentage = if ($cache.sevenDay) { $cache.sevenDay.usedPercentage } else { $null }
+  $weeklyResetsAt = if ($cache.sevenDay) { $cache.sevenDay.resetsAt } else { $null }
+
+  if ("$($svc.usedPercentage)" -ne "$usedPercentage" -or "$($svc.resetsAt)" -ne "$resetsAt" -or
+      "$($svc.weeklyUsedPercentage)" -ne "$weeklyUsedPercentage" -or "$($svc.weeklyResetsAt)" -ne "$weeklyResetsAt" -or
+      $svc.lastSource -ne "statusline" -or $svc.mode -ne "auto-precise") {
+    $result.changed = $true
+  }
+
+  $svc | Add-Member -NotePropertyName usedPercentage -NotePropertyValue $usedPercentage -Force
+  $svc | Add-Member -NotePropertyName resetsAt -NotePropertyValue $resetsAt -Force
+  $svc | Add-Member -NotePropertyName weeklyUsedPercentage -NotePropertyValue $weeklyUsedPercentage -Force
+  $svc | Add-Member -NotePropertyName weeklyResetsAt -NotePropertyValue $weeklyResetsAt -Force
+  $svc | Add-Member -NotePropertyName lastSource -NotePropertyValue "statusline" -Force
+  $svc | Add-Member -NotePropertyName mode -NotePropertyValue "auto-precise" -Force
+
+  $last = Get-LastEvent $svc
+  $pendingRecovery = ($last -and $last.type -eq "depleted")
+
+  if ($usedPercentage -ge $claudeDepletedThreshold -and -not $pendingRecovery) {
+    $svc.events = @($svc.events) + [PSCustomObject]@{
+      timestamp = $nowIso
+      type      = "depleted"
+      resetHint = $resetsAt
+    }
+    Write-Host "[claude] 上限到達を検知(statusline) ($nowIso) resetsAt=$resetsAt" -ForegroundColor Red
+    $result.changed = $true
+  }
+  elseif ($pendingRecovery -and $null -ne $previousUsed -and $previousUsed -ge 95 -and
+          ($previousUsed - $usedPercentage) -ge $claudeRecoveryDropPoints) {
+    $lastDepletedAt = [datetime]$last.timestamp
+    $expected = $lastDepletedAt.AddHours($svc.resetCycleHours)
+    $irregular = $now -lt $expected.AddMinutes(-15)
+
+    $svc.events = @($svc.events) + [PSCustomObject]@{
+      timestamp = $nowIso
+      type      = "recovered"
+      irregular = $irregular
+    }
+    Write-Host "[claude] 回復を検知(statusline) ($nowIso) irregular=$irregular" -ForegroundColor Green
+    $result.changed = $true
+
+    $subject = if ($irregular) { "[$($svc.name)] 通常より早く回復しました" } else { "[$($svc.name)] 利用制限が回復しました" }
+    $body = @"
+$($svc.name) の利用制限が回復しました。
+
+回復時刻: $nowIso
+上限到達時刻: $($last.timestamp)
+通常のリセット目安: $($svc.resetCycleHours)時間後 ($($expected.ToString('yyyy-MM-dd HH:mm')))
+イレギュラー回復: $(if ($irregular) { 'はい（通常より早い）' } else { 'いいえ（通常どおり）' })
+"@
+    $result.notifications += @{ subject = $subject; body = $body }
+  }
+
+  return $result
+}
+
 $changed = $false
 $notifications = @()
 
+# --- Claude: statuslineキャッシュがあればそれを正として使い、無い/古い場合のみpingにフォールバック ---
+$claudeSvc = $data.services | Where-Object { $_.id -eq "claude" }
+if ($claudeSvc) {
+  $claudeCache = Get-ClaudeRateLimitCache
+
+  if ($claudeCache) {
+    $r = Update-ClaudePrecise $claudeSvc $claudeCache
+    if ($r.changed) { $changed = $true }
+    $notifications += $r.notifications
+  }
+  else {
+    $prevSource = $claudeSvc.lastSource
+    $prevMode = $claudeSvc.mode
+    $result = Test-ClaudeStatus
+
+    if ($result.status -eq "unknown") {
+      Write-Host "[claude] 状態を確認できませんでした（ping方式・キャッシュ無し/期限切れ）: $($result.raw)" -ForegroundColor Yellow
+    }
+    else {
+      $claudeSvc | Add-Member -NotePropertyName lastSource -NotePropertyValue "ping" -Force
+      $claudeSvc | Add-Member -NotePropertyName mode -NotePropertyValue "auto-precise" -Force
+      if ($prevSource -ne "ping" -or $prevMode -ne "auto-precise") { $changed = $true }
+
+      $last = Get-LastEvent $claudeSvc
+      $pendingRecovery = ($last -and $last.type -eq "depleted")
+
+      if ($result.status -eq "depleted" -and -not $pendingRecovery) {
+        $claudeSvc.events = @($claudeSvc.events) + [PSCustomObject]@{
+          timestamp = $nowIso
+          type      = "depleted"
+          resetHint = $result.resetHint
+        }
+        Write-Host "[claude] 上限到達を検知(ping) ($nowIso) 目安: $($result.resetHint)" -ForegroundColor Red
+        $changed = $true
+      }
+      elseif ($result.status -eq "ready" -and $pendingRecovery) {
+        $lastDepletedAt = [datetime]$last.timestamp
+        $expected = $lastDepletedAt.AddHours($claudeSvc.resetCycleHours)
+        $irregular = $now -lt $expected.AddMinutes(-15)
+
+        $claudeSvc.events = @($claudeSvc.events) + [PSCustomObject]@{
+          timestamp = $nowIso
+          type      = "recovered"
+          irregular = $irregular
+        }
+        Write-Host "[claude] 回復を検知(ping) ($nowIso) irregular=$irregular" -ForegroundColor Green
+        $changed = $true
+
+        $subject = if ($irregular) { "[$($claudeSvc.name)] 通常より早く回復しました" } else { "[$($claudeSvc.name)] 利用制限が回復しました" }
+        $body = @"
+$($claudeSvc.name) の利用制限が回復しました。
+
+回復時刻: $nowIso
+上限到達時刻: $($last.timestamp)
+通常のリセット目安: $($claudeSvc.resetCycleHours)時間後 ($($expected.ToString('yyyy-MM-dd HH:mm')))
+イレギュラー回復: $(if ($irregular) { 'はい（通常より早い）' } else { 'いいえ（通常どおり）' })
+"@
+        $notifications += @{ subject = $subject; body = $body }
+      }
+      # 状態変化なし（変わらずready、または変わらずdepleted）の場合はイベントは追加しない
+    }
+  }
+}
+
+# --- ChatGPT: 従来どおりping方式のみ ---
 foreach ($cfg in @(
-    @{ id = "claude";  test = { Test-ClaudeStatus } },
     @{ id = "chatgpt"; test = { Test-CodexStatus } }
   )) {
 

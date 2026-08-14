@@ -134,6 +134,15 @@
     background: rgba(210,153,34,0.15); color: var(--cooldown); font-weight:600;
   }
 
+  .weekly{ margin-top: 12px; }
+  .weekly .weekly-row{
+    display:flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-bottom: 4px;
+  }
+  .weekly .weekly-row .weekly-pct{ font-family: var(--font-mono); color: var(--text); font-weight:600; }
+  .weekly .weekly-bar{ height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+  .weekly .weekly-fill{ height: 100%; border-radius: 3px; }
+  .weekly .weekly-reset{ margin-top: 4px; font-size: 10.5px; color: var(--faint); font-family: var(--font-mono); }
+
   .empty{
     text-align:center; padding: 60px 20px; color: var(--muted);
   }
@@ -179,6 +188,28 @@ function fmtDur(ms){
   if(h <= 0) return `${m}分`;
   return `${h}時間${m}分`;
 }
+function fmtWeekday(iso){
+  if(!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('ja-JP', { month:'numeric', day:'numeric', weekday:'short', hour:'2-digit', minute:'2-digit' });
+}
+
+// Claude用: statuslineキャッシュ由来の実測usedPercentageからリング状態を計算する。
+// (ping方式のcomputeStateとは別系統。usedPercentageが数値で入っている場合のみ使う)
+function computeClaudePreciseState(service){
+  const now = new Date();
+  const pct = Math.max(0, Math.min(100, 100 - service.usedPercentage));
+  const status = statusOf(pct);
+  let nextInfo;
+  if(service.resetsAt){
+    const remain = new Date(service.resetsAt) - now;
+    nextInfo = remain > 0 ? `あと ${fmtDur(remain)} でリセット` : 'リセット目安を経過';
+  } else {
+    nextInfo = '—';
+  }
+  const events = [...(service.events||[])].sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
+  return { pct, status, nextInfo, lastEvent: events[events.length-1] };
+}
 
 function computeState(service){
   const events = [...(service.events||[])].sort((a,b)=> new Date(a.timestamp)-new Date(b.timestamp));
@@ -202,7 +233,8 @@ function computeState(service){
 }
 
 function renderCard(service){
-  const state = computeState(service);
+  const hasPrecise = service.id === 'claude' && service.usedPercentage !== null && service.usedPercentage !== undefined;
+  const state = hasPrecise ? computeClaudePreciseState(service) : computeState(service);
   const events = [...(service.events||[])].sort((a,b)=> new Date(b.timestamp)-new Date(a.timestamp)).slice(0,4);
 
   const dash = RING_C * (1 - state.pct/100);
@@ -218,13 +250,32 @@ function renderCard(service){
     </div>`;
   }).join('') : `<div class="h-item">まだ記録がありません</div>`;
 
+  let modeTagText;
+  if(service.mode === 'manual'){
+    modeTagText = '手動記録';
+  } else if(service.mode === 'auto-precise'){
+    modeTagText = service.lastSource === 'ping' ? '自動監視(pingフォールバック)' : '自動監視(実数値)';
+  } else {
+    modeTagText = '自動監視(10分毎)';
+  }
+
+  const weeklyHtml = (hasPrecise && service.weeklyUsedPercentage !== null && service.weeklyUsedPercentage !== undefined) ? `
+    <div class="weekly">
+      <div class="weekly-row">
+        <span>週間制限</span>
+        <span class="weekly-pct">${Math.round(service.weeklyUsedPercentage)}%</span>
+      </div>
+      <div class="weekly-bar"><div class="weekly-fill" style="width:${Math.min(100,Math.max(0,service.weeklyUsedPercentage))}%; background:${service.color}"></div></div>
+      <div class="weekly-reset">リセット: ${fmtWeekday(service.weeklyResetsAt)}</div>
+    </div>` : '';
+
   return `
   <div class="card">
     <div class="accent-bar" style="background:${service.color}"></div>
     <div class="card-head">
       <div>
         <div class="service-name">${service.name}</div>
-        <div class="mode-tag">${service.mode === 'manual' ? '手動記録' : '自動監視(10分毎)'}</div>
+        <div class="mode-tag">${modeTagText}</div>
       </div>
       <div class="status-pill ${state.status}">${statusLabel[state.status]}</div>
     </div>
@@ -245,6 +296,7 @@ function renderCard(service){
         ${state.lastEvent ? `<div class="row"><span class="k">直近</span><span class="v">${fmtTime(state.lastEvent.timestamp)}</span></div>` : ''}
       </div>
     </div>
+    ${weeklyHtml}
     <div class="history">
       <div class="h-label">履歴</div>
       ${historyHtml}
